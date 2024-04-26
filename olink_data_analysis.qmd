@@ -1,0 +1,955 @@
+---
+title: "Olink cohort - Tübingen"
+subtitle: "Report on Survival analysis"
+author: "Louise Maise"
+format:
+  html:
+    code-fold: true
+    code-summary: "Show the code"
+    toc: true
+    toc-location: left
+    toc-title: " "
+    number-sections: true
+---
+
+# Introduction
+
+The Olink cohort comprises 60 glioma patients: 30 patients with glioblastoma and 30 patients with either Astrocytoma IDH mut grades 2-4 or Oligodendroglioma grades 2-3 according to WHO CNS 5 nomenclature.
+
+The investigation of patient tissue from this cohort has revealed several cytokines as significantly enriched in glioblastoma vs. IDH mutant gliomas. Here, these cytokines are further considered in terms of potential relevance as prognostic markers, especially in glioblastoma patients. Overall and progression-free survival were selected as endpoints for this retrospective analysis.
+
+The following report will explain crucial steps of the performed survival analysis and provide insight into first preliminary results.
+
+
+# Loading libraries
+
+Several packages were used for data table generation and figure curation.
+
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse) 
+library(dplyr)
+library(DT) # create interactive datatables
+library(survival) # survival analysis
+library(survminer) # survival analysis, optimal cutoff generation
+library(gt) # formatting gt_objects
+library(gtsummary) # uni- and mutivariate analysis, table generation
+library(patchwork) # arranging plots
+```
+
+
+# Loading and cleaning data
+
+The dataset has already been loaded and cleaned in the previous step of this pipeline. Functions for further data processing have been deposited in a separate .R script ("functions.R")
+
+```{r}
+# Source functions
+source(file="R/functions.R")
+
+# Read the clean dataset
+clean_data <- readRDS(file = "input/clean_data.rds")
+```
+
+Here is our preliminary data table. As you can see, I have only included 11 cytokines of interest for further analysis: CXCL11, CD83, IL8, CD244, IL6, CXCL9, CD40, TGF-beta, PDL1, CD5 and VEGFA.
+
+```{r, echo = FALSE}
+# Display clean data table 
+datatable(clean_data, filter = "top")
+```
+
+------------------------------------------------------------------------
+
+## Generate binary variables for cytokine levels in patient tissue
+
+One important step in preparing data for further analysis involves transforming cytokine expression data into binary variables. This may be achieved by using the median expression value as the respective cutoff for the "High" and "Low" expression groups for each respective cytokine. Alternatively, an optimal cutoff value for survival analysis is determined for each cytokine using the survminer package. Check documentation for all `survminer()` functions [here](https://rpkgs.datanovia.com/survminer/index.html).
+
+Considering the observed differences in cytokine levels between glioblastomas and IDH mut gliomas, cutoff values for "High" vs "Low" cytokine expression were determined within the defined diagnostic group of glioblastomas (IDH wt) only.
+
+::: callout-tip
+So let's take a closer look at the glioblastoma patients!
+:::
+
+The clean and pre-processed data is filtered to include only cytokine expression and clinical data of glioblastoma patients. Here's our updated datatable:
+
+```{r}
+# Filter clean_data by diagnosis "glioblastoma"
+glioblastoma_data <- clean_data %>%
+  filter(hgg_comparison == "glioblastoma")
+datatable(glioblastoma_data, filter = "top")
+```
+
+
+### Median cutoff method
+
+First, a binary factor variable ("High" vs "Low") is generated for cytokine expression using the *median* value of each cytokine as the respective cutoff value. These variables are stored with the suffix "\_binary".
+
+```{r}
+# Generate binary variables "binary" for proteins of interest using median as cut-off 
+
+## First, define column names of the cytokines of interest
+variable_names <- c("CXCL11", "CD83", "CD40", "CD5", "LAP_TGF_beta_1", "VEGFA", "PDL1", "CD244", "IL6", "IL8", "CXCL9")
+
+## Call  function "generate_binary_var_median_cutoff_glioblastoma" and assign the returned dataframe to a new variable
+source("R/functions.R")
+glioblastoma_data_w_binary <- generate_binary_var_median_cutoff_glioblastoma(glioblastoma_data, variable_names)
+
+## Convert numerical binary values to factors "High" and "Low", calling function "convert_to_factor"
+variable_names_factors <- c("CXCL11_binary_median", "CD83_binary_median", "CD40_binary_median",  "CD5_binary_median", "LAP_TGF_beta_1_binary_median", "VEGFA_binary_median", "PDL1_binary_median", "CD244_binary_median", "IL6_binary_median", "IL8_binary_median", "CXCL9_binary_median")
+source("R/functions.R")
+
+glioblastoma_data_w_binary_2 <- convert_to_factor_median(glioblastoma_data_w_binary, variable_names_factors)
+
+```
+
+
+### Optimal cutoff method
+
+Furthermore, a second binary variable ("High" vs "Low") is generated for cytokine expression using the *optimal* cutoff value of each cytokine as the respective cutoff value. These variables are stored with the suffix "\_binary_optimal".
+
+```{r}
+# Generate binary variables "binary_optimal" for proteins of interest using optimal cut-off 
+
+## Iterate over each variable
+for (variable in variable_names) {
+  
+  # Calculate optimal cutpoint for the current variable
+  optimal_cutpoint <- surv_cutpoint(
+    data = glioblastoma_data_w_binary_2,
+    variables = variable,
+    time = "os_in_months",
+    event = "censor_os"
+  )
+  
+  # Extract the optimal cutoff value
+  optimal_cutoff_value <- optimal_cutpoint$cutpoint
+  
+## Create a binary variable indicating whether the current variable is above the optimal cutoff
+  glioblastoma_data_w_binary_2[[paste0(variable, "_binary_optimal")]] <- glioblastoma_data_w_binary_2[[variable]] > optimal_cutoff_value$cutpoint
+}
+
+## Convert numerical binary values to factors "High" and "Low", calling function "convert_to_factor"
+variable_names_factors <- c("CXCL11_binary_optimal", "CD83_binary_optimal", "CD40_binary_optimal",  "CD5_binary_optimal", "LAP_TGF_beta_1_binary_optimal", "VEGFA_binary_optimal", "PDL1_binary_optimal", "CD244_binary_optimal", "IL6_binary_optimal", "IL8_binary_optimal", "CXCL9_binary_optimal")
+source("R/functions.R")
+glioblastoma_data_w_binary_2 <- convert_to_factor(glioblastoma_data_w_binary_2, variable_names_factors)
+```
+
+Here's what our updated datatable looks like:
+
+::: callout-tip
+Notice the additional columns with the suffixes "\_binary" and "\_binary_optimal", coding each cytokine as a new binary variable of "High" and "Low" expression as determined ba the median and optimal cutoff values!
+:::
+
+```{r}
+# Print the datatable
+datatable(glioblastoma_data_w_binary_2, filter = "top")
+
+saveRDS(glioblastoma_data_w_binary_2, "input/glioblastoma_data_clean.rds")
+```
+
+------------------------------------------------------------------------
+
+# Patient characteristics
+
+Now that our data is complete, patient characteristics can be summarized in publication-ready tables using the gtsummary and gt packages. See documentation for [gtsummary](https://www.danieldsjoberg.com/gtsummary/articles/tbl_summary.html) and [gt](https://gt.rstudio.com/index.html).
+
+## Entire cohorz (60 patients)
+
+First, a table of patient characteristics is generated for all 60 patients.
+
+```{r, fig.width = 9}
+# Create Table showing patient characteristics for all patients
+clean_data %>%
+  select(hgg_comparison, age_at_diagnosis_yrs, age_at_diagnosis_binary, sex, os_in_months, pfs_in_months, dexa_intake, mgmt_status,
+         localization_pre_op_binary, karnofsky_pre_op_binary, resection, therapy) %>%
+  tbl_summary(
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_continuous2() ~ "{median} ({p25}, {p75})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    type = list(
+      dexa_intake ~ "categorical", 
+      os_in_months ~ "continuous2", 
+      pfs_in_months ~ "continuous2",
+      age_at_diagnosis_yrs ~ "continuous",
+      age_at_diagnosis_binary ~ "categorical",
+      hgg_comparison ~ "categorical",
+      sex ~ "categorical", 
+      localization_pre_op_binary ~ "categorical", 
+      resection ~ "categorical",
+      mgmt_status ~ "categorical", 
+      therapy ~ "categorical", 
+      karnofsky_pre_op_binary ~ "categorical"),
+    digits = all_continuous() ~ 2,
+    label = list(
+      os_in_months = "Median Overall Survival (months)",
+      pfs_in_months = "Median Progression-free Survival (months)",
+      age_at_diagnosis_yrs = "Mean Age at diagnosis in yrs",
+      age_at_diagnosis_binary = "Age group at diagnosis",
+      hgg_comparison = "Diagnosis according to WHO CNS 5",
+      sex = "Sex",
+      mgmt_status = "MGMT promotor methylation status",
+      dexa_intake = "Dexamethasone intake",
+      localization_pre_op_binary = "Tumor localization pre-op.",
+      karnofsky_pre_op_binary = "KPS pre-op.",
+      therapy = "First line of therapy",
+      resection = "Grade of resection"
+    )
+  ) %>%
+  bold_labels() %>%
+  modify_caption("**Table 1. Patient Characteristics**")
+```
+
+
+## Glioblastoma only (30 patients)
+
+Next, a table of patient characteristics is generated for the 30 glioblastoma patients only
+
+```{r}
+# Create Table showing patient characteristics for glioblastoma patients only
+
+glioblastoma_data %>%
+  select(age_at_diagnosis_yrs, age_at_diagnosis_binary, sex, os_in_months, pfs_in_months, dexa_intake, mgmt_status,
+         localization_pre_op_binary, karnofsky_pre_op_binary, resection, therapy) %>%
+  tbl_summary(
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_continuous2() ~ "{median} ({p25}, {p75})",
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    type = list(
+      dexa_intake ~ "categorical", 
+      os_in_months ~ "continuous2", 
+      pfs_in_months ~ "continuous2",
+      age_at_diagnosis_yrs ~ "continuous",
+      age_at_diagnosis_binary ~ "categorical",
+      sex ~ "categorical", 
+      localization_pre_op_binary ~ "categorical", 
+      resection ~ "categorical",
+      mgmt_status ~ "categorical", 
+      therapy ~ "categorical", 
+      karnofsky_pre_op_binary ~ "categorical"),
+    digits = all_continuous() ~ 2,
+    label = list(
+      os_in_months = "Median Overall Survival (months)",
+      pfs_in_months = "Median Progression-free Survival (months)",
+      age_at_diagnosis_yrs = "Mean Age at diagnosis in yrs",
+      age_at_diagnosis_binary = "Age group at diagnosis",
+      sex = "Sex",
+      mgmt_status = "MGMT promotor methylation status",
+      dexa_intake = "Dexamethasone intake",
+      localization_pre_op_binary = "Tumor localization pre-op.",
+      karnofsky_pre_op_binary = "KPS pre-op.",
+      therapy = "First line of therapy",
+      resection = "Grade of resection"
+    )
+  ) %>%
+  bold_labels() %>%
+  modify_caption("**Table 2. Patient Characteristics - Glioblastoma patients**")
+```
+
+
+# Survival analysis: Median cutoff
+
+The survival analysis begins!
+
+First, Kaplan-Meier curves are generated for "High" and "Low" expression groups of the different cytokines of interest as defined by the cutoff of respective *median* values. Log-rank tests are performed to test significance of survival differences. The `survfit()` function fits the Kaplan-Meier curve to the survival data, `ggsurvplot()` visualizes the curve.
+
+## Overall survival
+
+```{r}
+
+glioblastoma_data_complete <- readRDS("input/glioblastoma_data_complete.rds")
+
+variable_names_binary <- c("CXCL11_binary", "CD83_binary", "CD40_binary", 
+                      "CD5_binary", "LAP_TGF_beta_1_binary", "VEGFA_binary",
+                      "PDL1_binary", "CD244_binary", "IL6_binary", "IL8_binary", 
+                      "CXCL9_binary")
+
+### Create a list to store the plots
+plot_list_os <- list()
+### Loop through each variable
+for (variable in variable_names_binary) {
+  # Fit the survival model
+  km_fit <- survfit(Surv(os_in_months, censor_os) ~ get(variable), 
+                    data = glioblastoma_data_complete)
+  
+  # Generate the plot
+  ggsurv_plot <- ggsurvplot(
+    km_fit,
+    data = glioblastoma_data_complete,
+    surv.median.line = "hv",
+    risk.table = TRUE,
+    tables.height = 0.3,
+    pval = TRUE,
+    pval.method = TRUE,
+    pval.method.coord = c(0, 0.25),
+    pval.coord = c(0, 0.15),
+    conf.int = FALSE,
+    palette = "jco",
+    legend.title = "Legend",
+    legend.labs = c(paste(variable, "Low"), paste(variable, "High"))
+  ) +
+    ggtitle(paste("OS -", variable, "- median cutoff"))
+  
+  # Modify theme
+  ggsurv_plot$plot <- ggsurv_plot$plot +
+    theme(
+      legend.position = c(0.8, 0.8),
+      legend.box.just = "right",
+      legend.margin = margin(5, 5, 5, 5),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 12, face = "bold")
+    )
+  
+  # Store the plot in the list
+  plot_list_os[[variable]] <- ggsurv_plot
+}
+
+for (variable in variable_names_binary) {
+  print(plot_list_os[[variable]])
+}
+
+```
+
+```{r, fig.width = 15, fig.height = 18}
+### Print the plots side by side
+library(patchwork)
+
+# Create a list to store ggplot objects
+ggplot_list_os <- lapply(variable_names_binary, function(variable) {
+  # Extract the ggsurvplot object
+  ggsurv_plot <- plot_list_os[[variable]]$plot
+  
+  # Remove the title from the risk table
+  ggsurv_plot$table <- ggsurv_plot$table + theme(plot.title = element_text(hjust = 0))
+  
+  # Add the title to the main plot
+  ggsurv_plot <- ggsurv_plot + ggtitle(paste("OS by", variable, " - median cutoff"))
+  
+  # Return the modified plot
+  ggsurv_plot
+})
+
+# Arrange plots in two columns
+plots_arranged_os <- wrap_plots(ggplot_list_os, ncol = 2)
+
+# Print the arranged plots
+plots_arranged_os
+```
+
+
+## Progression-free survival
+
+```{r}
+### Create a list to store the plots
+plot_list_pfs <- list()
+### Loop through each variable
+for (variable in variable_names_binary) {
+  # Fit the survival model
+  km_fit <- survfit(Surv(pfs_in_months, censor_pfs) ~ get(variable), 
+                    data = glioblastoma_data_complete)
+  
+  # Generate the plot
+  ggsurv_plot <- ggsurvplot(
+    km_fit,
+    data = glioblastoma_data_complete,
+    surv.median.line = "hv",
+    risk.table = TRUE,
+    tables.height = 0.3,
+    pval = TRUE,
+    pval.method = TRUE,
+    pval.method.coord = c(50, 0.5),
+    pval.coord = c(0, 0.15),
+    conf.int = FALSE,
+    palette = "jco",
+    legend.title = "Legend",
+    legend.labs = c(paste(variable, "Low"), paste(variable, "High"))
+  ) +
+    ggtitle(paste("PFS -", variable, "- median cutoff"))
+  
+  # Modify theme
+  ggsurv_plot$plot <- ggsurv_plot$plot +
+    theme(
+      legend.position = c(0.8, 0.8),
+      legend.box.just = "right",
+      legend.margin = margin(5, 5, 5, 5),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 12, face = "bold")
+    )
+  
+  # Store the plot in the list
+  plot_list_pfs[[variable]] <- ggsurv_plot
+}
+
+for (variable in variable_names_binary) {
+  print(plot_list_pfs[[variable]])
+}
+
+```
+
+```{r, fig.width = 15, fig.height = 18}
+### Print the plots side by side
+library(patchwork)
+
+# Create a list to store ggplot objects
+ggplot_list_pfs <- lapply(variable_names_binary, function(variable) {
+  # Extract the ggsurvplot object
+  ggsurv_plot <- plot_list_pfs[[variable]]$plot
+  
+  # Remove the title from the risk table
+  ggsurv_plot$table <- ggsurv_plot$table + theme(plot.title = element_text(hjust = 0))
+  
+  # Add the title to the main plot
+  ggsurv_plot <- ggsurv_plot + ggtitle(paste("PFS by", variable, " - median cutoff"))
+  
+  # Return the modified plot
+  ggsurv_plot
+})
+
+# Arrange plots in two columns
+plots_arranged_pfs <- wrap_plots(ggplot_list_pfs, ncol = 2)
+
+# Print the arranged plots
+plots_arranged_pfs
+```
+
+
+# Survival analysis: Optimal cutoff
+
+The survival analysis is now repeated using the "High" and "Low" stratification as defined by the *optimal* cutoff method:
+
+## Overall survival
+
+```{r}
+glioblastoma_data_complete <- readRDS("input/glioblastoma_data_complete.rds")
+
+variable_names_binary_optimal <- c("CXCL11_binary_optimal", "CD83_binary_optimal", "CD40_binary_optimal", "CD5_binary_optimal", "LAP_TGF_beta_1_binary_optimal", "VEGFA_binary_optimal","PDL1_binary_optimal", "CD244_binary_optimal", "IL6_binary_optimal", "IL8_binary_optimal", "CXCL9_binary_optimal")
+
+### Create a list to store the plots
+plot_list_os_optimal <- list()
+### Loop through each variable
+for (variable in variable_names_binary_optimal) {
+  # Fit the survival model
+  km_fit <- survfit(Surv(os_in_months, censor_os) ~ get(variable), 
+                    data = glioblastoma_data_complete)
+  
+  # Generate the plot
+  ggsurv_plot <- ggsurvplot(
+    km_fit,
+    data = glioblastoma_data_complete,
+    surv.median.line = "hv",
+    risk.table = TRUE,
+    tables.height = 0.3,
+    pval = TRUE,
+    pval.method = TRUE,
+    pval.method.coord = c(0, 0.25),
+    pval.coord = c(0, 0.15),
+    conf.int = FALSE,
+    palette = "jco",
+    legend.title = "Legend",
+    legend.labs = c(paste(variable, "Low"), paste(variable, "High"))
+  ) +
+    ggtitle(paste("OS -", variable, "cutoff"))
+  
+  # Modify theme
+  ggsurv_plot$plot <- ggsurv_plot$plot +
+    theme(
+      legend.position = c(0.8, 0.8),
+      legend.box.just = "right",
+      legend.margin = margin(5, 5, 5, 5),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 12, face = "bold")
+    )
+  
+  # Store the plot in the list
+  plot_list_os_optimal[[variable]] <- ggsurv_plot
+}
+
+for (variable in variable_names_binary_optimal) {
+  print(plot_list_os_optimal[[variable]])
+}
+```
+
+```{r, fig.width = 15, fig.height = 18}
+### Print the plots side by side
+library(patchwork)
+
+# Create a list to store ggplot objects
+ggplot_list_os_optimal <- lapply(variable_names_binary_optimal, function(variable) {
+  # Extract the ggsurvplot object
+  ggsurv_plot <- plot_list_os_optimal[[variable]]$plot
+  
+  # Remove the title from the risk table
+  ggsurv_plot$table <- ggsurv_plot$table + theme(plot.title = element_text(hjust = 0))
+  
+  # Add the title to the main plot
+  ggsurv_plot <- ggsurv_plot + ggtitle(paste("OS by", variable, " - optimal cutoff"))
+  
+  # Return the modified plot
+  ggsurv_plot
+})
+
+# Arrange plots in two columns
+plots_arranged_os_optimal <- wrap_plots(ggplot_list_os_optimal, ncol = 2)
+
+# Print the arranged plots
+plots_arranged_os_optimal
+```
+
+
+## Progression-free survival
+
+```{r}
+### Create a list to store the plots
+plot_list_pfs_optimal <- list()
+### Loop through each variable
+for (variable in variable_names_binary_optimal) {
+  # Fit the survival model
+  km_fit <- survfit(Surv(pfs_in_months, censor_pfs) ~ get(variable), 
+                    data = glioblastoma_data_complete)
+  
+  # Generate the plot
+  ggsurv_plot <- ggsurvplot(
+    km_fit,
+    data = glioblastoma_data_complete,
+    surv.median.line = "hv",
+    risk.table = TRUE,
+    tables.height = 0.3,
+    pval = TRUE,
+    pval.method = TRUE,
+    pval.method.coord = c(50, 0.5),
+    pval.coord = c(50, 0.4),
+    conf.int = FALSE,
+    palette = "jco",
+    legend.title = "Legend",
+    legend.labs = c(paste(variable, "Low"), paste(variable, "High"))
+  ) +
+    ggtitle(paste("PFS -", variable, "cutoff"))
+  
+  # Modify theme
+  ggsurv_plot$plot <- ggsurv_plot$plot +
+    theme(
+      legend.position = c(0.8, 0.8),
+      legend.box.just = "right",
+      legend.margin = margin(5, 5, 5, 5),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 12, face = "bold")
+    )
+  
+  # Store the plot in the list
+  plot_list_pfs_optimal[[variable]] <- ggsurv_plot
+}
+
+for (variable in variable_names_binary_optimal) {
+  print(plot_list_pfs_optimal[[variable]])
+}
+```
+
+```{r, fig.width = 15, fig.height = 18}
+### Print the plots side by side
+library(patchwork)
+
+# Create a list to store ggplot objects
+ggplot_list_pfs_optimal <- lapply(variable_names_binary_optimal, function(variable) {
+  # Extract the ggsurvplot object
+  ggsurv_plot <- plot_list_pfs_optimal[[variable]]$plot
+  
+  # Remove the title from the risk table
+  ggsurv_plot$table <- ggsurv_plot$table + theme(plot.title = element_text(hjust = 0))
+  
+  # Add the title to the main plot
+  ggsurv_plot <- ggsurv_plot + ggtitle(paste("PFS by", variable, " - optimal cutoff"))
+  
+  # Return the modified plot
+  ggsurv_plot
+})
+
+# Arrange plots in two columns
+plots_arranged_pfs_optimal <- wrap_plots(ggplot_list_pfs_optimal, ncol = 2)
+
+# Print the arranged plots
+plots_arranged_pfs_optimal
+```
+
+
+# Univariate analysis: Median cutoff
+
+For univariate analysis / regression using Cox proportionate Hazards model, the [gtsummary()]() package was applied. [gt()]() was used for table formatting.
+
+## Overall survival
+
+```{r}
+# Load glioblastoma data clean_w_binary_2: including the different binary variables
+glioblastoma_data_complete <- readRDS("input/glioblastoma_data_complete.rds")
+
+# Remove unused levels#########
+glioblastoma_data_complete$resection
+if ("Biopsy" %in% levels(glioblastoma_data_complete$resection)) {
+  glioblastoma_data_complete$resection <- droplevels(glioblastoma_data_complete$resection, exclude = "Biopsy")
+}
+levels(glioblastoma_data_complete$resection)
+
+
+levels(glioblastoma_data_complete$therapy)
+if ("Radiotherapy followed by PC" %in% levels(glioblastoma_data_complete$therapy)) {
+  glioblastoma_data_complete$therapy <- droplevels(glioblastoma_data_complete$therapy, 
+                                                   exclude = "Radiotherapy followed by PC")
+}
+levels(glioblastoma_data_complete$therapy)
+as.data.frame(glioblastoma_data_complete)
+```
+
+```{r}
+os_table_2 <- glioblastoma_data_complete %>%
+  select(sex, age_at_diagnosis_binary, mgmt_status, localization_pre_op_binary, 
+         resection, dexa_intake, therapy,
+         os_in_months, censor_os, CXCL11_binary_2, CD83_binary_2, 
+         VEGFA_binary_2,CXCL9_binary_2, CD5_binary_2, 
+         CD40_binary_2, CD244_binary_2, IL6_binary_2,
+         PDL1_binary_2, IL8_binary_2, LAP_TGF_beta_1_binary_2) %>%
+  tbl_uvregression(
+    method = coxph,
+    y = Surv(os_in_months, censor_os),
+    exponentiate = TRUE,
+    pvalue_fun = ~style_pvalue(.x, digits = 2)
+  )
+os_table_2 <- os_table_2 %>%
+  add_global_p() %>% 
+  add_q()%>%
+  add_nevent() %>% 
+  bold_p() %>% 
+  bold_p(t = 0.10, q = TRUE) %>% 
+  bold_labels()
+
+# Convert to gt
+formatted_table_os_2_univariate_gt <- as_gt(os_table_2)
+
+# Add additional customization with gt
+formatted_table_os_2_univariate_gt <- formatted_table_os_2_univariate_gt %>%
+  tab_header(
+    title = "Overall survival by Median cutoff method",
+    subtitle = "Univariate Cox regression"
+  )
+
+#Print formatted table
+formatted_table_os_2_univariate_gt
+```
+
+## Progression-free survival
+
+```{r}
+pfs_table_2 <- glioblastoma_data_complete %>%
+  select(sex, age_at_diagnosis_binary, mgmt_status, localization_pre_op_binary, 
+         resection, dexa_intake, therapy,
+         pfs_in_months, censor_pfs, CXCL11_binary_2, CD83_binary_2, 
+         VEGFA_binary_2,CXCL9_binary_2, CD5_binary_2, 
+         CD40_binary_2, CD244_binary_2, IL6_binary_2,
+         PDL1_binary_2, IL8_binary_2, LAP_TGF_beta_1_binary_2) %>%
+  tbl_uvregression(
+    method = coxph,
+    y = Surv(pfs_in_months, censor_pfs),
+    exponentiate = TRUE,
+    pvalue_fun = ~style_pvalue(.x, digits = 2)
+  ) 
+
+pfs_table_2 <- pfs_table_2 %>%
+  add_global_p() %>% 
+  add_q()%>%
+  add_nevent() %>% 
+  bold_p() %>% 
+  bold_p(t = 0.10, q = TRUE) %>% 
+  bold_labels()
+
+# Convert to gt
+formatted_table_pfs_2_univariate_gt <- as_gt(pfs_table_2)
+
+# Add additional customization with gt
+formatted_table_pfs_2_univariate_gt <- formatted_table_pfs_2_univariate_gt %>%
+  tab_header(
+    title = "Progreesion-free survival by Median cutoff method",
+    subtitle = "Univariate Cox regression"
+  )
+
+#Print formatted table
+formatted_table_pfs_2_univariate_gt
+```
+
+## Merged table
+
+```{r}
+# Print merged table######################
+theme_gtsummary_compact()
+merged_table_univariate_median_cutoff <- tbl_merge(
+  list(pfs_table_2, os_table_2),
+  tab_spanner = c("**Progression-free survival**", "**Overall survival**"))
+
+merged_table_univariate_median_cutoff <- merged_table_univariate_median_cutoff %>%
+  modify_caption("")
+
+merged_table_univariate_median_cutoff_gt <- as_gt(merged_table_univariate_median_cutoff)
+
+# Add additional customization with gt
+formatted_merged_table_univariate_median_cutoff_gt <- merged_table_univariate_median_cutoff_gt %>%
+  tab_header(
+    title = "Univariate analysis: Median cut-off, Glioblastoma only",
+    subtitle = "Univariate Cox regression"
+  )
+formatted_merged_table_univariate_median_cutoff_gt
+
+```
+
+
+# Univariate Analysis: Optimal cutoff
+
+## Overall survival
+
+```{r}
+
+# Univariate analysis of Overall Survival - by optimal cut-off##############
+os_table <- glioblastoma_data_complete %>%
+  select(sex, age_at_diagnosis_binary, mgmt_status, localization_pre_op_binary, 
+         resection, dexa_intake, therapy,
+         os_in_months, censor_os, CXCL11_binary_optimal, CD83_binary_optimal, 
+         VEGFA_binary_optimal,CXCL9_binary_optimal, CD5_binary_optimal, 
+         CD40_binary_optimal, CD244_binary_optimal, IL6_binary_optimal,
+         PDL1_binary_optimal, IL8_binary_optimal, LAP_TGF_beta_1_binary_optimal) %>%
+  tbl_uvregression(
+    method = coxph,
+    y = Surv(os_in_months, censor_os),
+    exponentiate = TRUE,
+    pvalue_fun = ~style_pvalue(.x, digits = 2)) 
+
+os_table <- os_table %>%
+  add_global_p() %>% 
+  add_q()%>%
+  add_nevent() %>% 
+  bold_p() %>% 
+  bold_p(t = 0.10, q = TRUE) %>% 
+  bold_labels()
+
+# Convert to gt
+formatted_table_os_univariate_gt <- as_gt(os_table)
+
+# Add additional customization with gt
+formatted_table_os_univariate_gt <- formatted_table_os_univariate_gt %>%
+  tab_header(
+    title = "Overall survival by Optimal cutoff method",
+    subtitle = "Univariate Cox regression"
+  )
+
+#Print formatted table
+formatted_table_os_univariate_gt
+```
+
+
+
+## Progression-free survival 
+
+```{r}
+# Univariate analysis of Overall Survival - by optimal cut-off##############
+pfs_table <- glioblastoma_data_complete %>%
+  select(sex, age_at_diagnosis_binary, mgmt_status, localization_pre_op_binary, 
+         resection, dexa_intake, therapy,
+         pfs_in_months, censor_pfs, CXCL11_binary_optimal, CD83_binary_optimal, 
+         VEGFA_binary_optimal,CXCL9_binary_optimal, CD5_binary_optimal, 
+         CD40_binary_optimal, CD244_binary_optimal, IL6_binary_optimal,
+         PDL1_binary_optimal, IL8_binary_optimal, LAP_TGF_beta_1_binary_optimal) %>%
+  tbl_uvregression(
+    method = coxph,
+    y = Surv(pfs_in_months, censor_pfs),
+    exponentiate = TRUE,
+    pvalue_fun = ~style_pvalue(.x, digits = 2)
+  )
+
+pfs_table <- pfs_table %>%
+  add_global_p() %>% 
+  add_q()%>%
+  add_nevent() %>% 
+  bold_p() %>% 
+  bold_p(t = 0.10, q = TRUE) %>% 
+  bold_labels()
+
+# Convert to gt
+formatted_table_pfs_univariate_gt <- as_gt(pfs_table)
+
+# Add additional customization with gt
+formatted_table_pfs_univariate_gt <- formatted_table_pfs_univariate_gt %>%
+  tab_header(
+    title = "Progression-free survival by Optimal cutoff method",
+    subtitle = "Univariate Cox regression"
+  )
+
+#Print formatted table
+formatted_table_pfs_univariate_gt
+```
+
+## Merged table
+```{r}
+merged_table_univariate_optimal_cutoff <- tbl_merge(
+  list(pfs_table, os_table),
+  tab_spanner = c("**Progression-free survival**", "**Overall survival**"))
+
+merged_table_univariate_optimal_cutoff <- merged_table_univariate_optimal_cutoff %>%
+  modify_caption("")
+
+merged_table_univariate_optimal_cutoff_gt <- as_gt(merged_table_univariate_optimal_cutoff)
+merged_table_univariate_optimal_cutoff_gt
+
+
+# Add additional customization with gt
+formatted_merged_table_univariate_optimal_cutoff_gt <- merged_table_univariate_optimal_cutoff_gt %>%
+  tab_header(
+    title = "Univariate analysis: Optimal cutoff method, Glioblastoma only",
+    subtitle = "Univariate Cox regression"
+  )
+formatted_merged_table_univariate_optimal_cutoff_gt
+```
+
+
+# IDH mut glioma patients
+
+We can now apply the *optimal* cutoff values as determined previously for the cytokines of interest using the dataset of glioblastoma patients to the IDH mut gliomas as well.
+Here is our updated datatable showing data of IDH mut glioma patients only:
+                    
+```{r, echo=FALSE}
+# Create a copy of the original dataset to preserve the original data
+data_with_binary_optimal <- clean_data
+
+## Iterate over each variable
+for (variable in variable_names) {
+  
+  # Calculate optimal cutpoint for the current variable using only glioblastoma data
+  optimal_cutpoint <- surv_cutpoint(
+    data = glioblastoma_data_w_binary_2,
+    variables = variable,
+    time = "os_in_months",
+    event = "censor_os"
+  )
+  
+  # Extract the optimal cutoff value
+  optimal_cutoff_value <- optimal_cutpoint$cutpoint
+  
+  ## Create a binary variable indicating whether the current variable is above the optimal cutoff
+  data_with_binary_optimal[[paste0(variable, "_binary_optimal")]] <- data_with_binary_optimal[[variable]] > optimal_cutoff_value$cutpoint
+}
+
+
+## Convert numerical binary values to factors "High" and "Low", calling function "convert_to_factor"
+variable_names_factors_optimal <- paste0(variable_names, "_binary_optimal")
+source("R/functions.R")
+data_with_binary_optimal <- convert_to_factor_optimal(data_with_binary_optimal, variable_names_factors_optimal)
+
+
+# Filter out only the IDH mut gliomas
+non_glioblastoma_data <- data_with_binary_optimal %>%
+  filter(hgg_comparison != "glioblastoma")
+
+datatable(non_glioblastoma_data)
+```
+
+As you can see, the cytokines VEGFA, IL6 and IL8 are consistently scored "Low" binarily according to the defined optimal cutoff from the glioblastoma patient data. Therefore, stratification and survival analysis are only performed by the remaining markers for IDH mut gliomas.
+
+
+## Overall survival
+
+```{r}
+
+## Overall Survival: Kaplan Meier curves and Log-rank tests for proteins of interest
+### Create a list to store the plots
+variable_names_binary_optimal_idh_mut <- c("CXCL11_binary_optimal", "CD83_binary_optimal", "CD40_binary_optimal", "CD5_binary_optimal", "LAP_TGF_beta_1_binary_optimal",  "PDL1_binary_optimal", "CD244_binary_optimal", "CXCL9_binary_optimal")
+
+plot_list_os_idh_mut <- list()
+
+### Loop through each variable
+for (variable in variable_names_binary_optimal_idh_mut) {
+  # Fit the survival model
+  km_fit <- survfit(Surv(os_in_months, censor_os) ~ get(variable), 
+                    data = non_glioblastoma_data)
+  
+  # Generate the plot
+  ggsurv_plot <- ggsurvplot(
+    km_fit,
+    data = non_glioblastoma_data,
+    risk.table = TRUE,
+    tables.height = 0.3,
+    pval = TRUE,
+    pval.method = TRUE,
+    pval.method.coord = c(0, 0.25),
+    pval.coord = c(0, 0.15),
+    conf.int = FALSE,
+    palette = "jco",
+    legend.title = "Legend",
+    legend.labs = c(paste(variable, "Low"), paste(variable, "High"))
+  ) +
+    ggtitle(paste("OS stratified by", variable, ", IDH mut gliomas"))
+  
+  # Modify theme
+  ggsurv_plot$plot <- ggsurv_plot$plot +
+    theme(
+      legend.position = c(0.9, 0.25),
+      legend.box.just = "right",
+      legend.margin = margin(5, 5, 5, 5),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 12, face = "bold")
+    )
+  
+  # Store the plot in the list
+  plot_list_os_idh_mut[[variable]] <- ggsurv_plot
+}
+
+### Print the plots
+for (variable in variable_names_binary_optimal_idh_mut) {
+  print(plot_list_os_idh_mut[[variable]])
+}
+```
+
+## Progression-free survival
+
+```{r}
+
+## Progression- Survival: Kaplan Meier curves and Log-rank tests for proteins of interest
+
+plot_list_pfs_idh_mut <- list()
+
+### Loop through each variable
+for (variable in variable_names_binary_optimal_idh_mut) {
+  # Fit the survival model
+  km_fit <- survfit(Surv(pfs_in_months, censor_pfs) ~ get(variable), 
+                    data = non_glioblastoma_data)
+  
+  # Generate the plot
+  ggsurv_plot <- ggsurvplot(
+    km_fit,
+    data = non_glioblastoma_data,
+    risk.table = TRUE,
+    tables.height = 0.3,
+    pval = TRUE,
+    pval.method = TRUE,
+    pval.method.coord = c(0, 0.25),
+    pval.coord = c(0, 0.15),
+    conf.int = FALSE,
+    palette = "jco",
+    legend.title = "Legend",
+    legend.labs = c(paste(variable, "Low"), paste(variable, "High"))
+  ) +
+    ggtitle(paste("PFS stratified by", variable, ", IDH mut gliomas"))
+  
+  # Modify theme
+  ggsurv_plot$plot <- ggsurv_plot$plot +
+    theme(
+      legend.position = c(0.9, 0.25),
+      legend.box.just = "right",
+      legend.margin = margin(5, 5, 5, 5),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 12, face = "bold")
+    )
+  
+  # Store the plot in the list
+  plot_list_pfs_idh_mut[[variable]] <- ggsurv_plot
+}
+
+### Print the plots
+for (variable in variable_names_binary_optimal_idh_mut) {
+  print(plot_list_pfs_idh_mut[[variable]])
+}
+```
